@@ -1,0 +1,7 @@
+{
+    "event_names": ["IF1", "IF2", "IBuf", "EX", "MEM", "DIV", "WB", "LLWB", "COM"],
+    "event_types": ["bytes", "pc", "bytes", "inst_bytes", "bytes", "bytes", "bytes", "bytes", "byte"],
+    "start_stage": "IF1",
+    "split_stages": ["IF2"],
+    "end_stages": ["COM", "LLWB"]
+}
