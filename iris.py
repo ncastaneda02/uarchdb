@@ -51,7 +51,7 @@ event_names = json_schema["event_names"]
 start_stage = json_schema["start_stage"]
 split_stages = json_schema["split_stages"]
 end_stages = json_schema["end_stages"]
-datatypes = ["bytes", "pc", "bytes", "inst_bytes", "bytes", "bytes", "bytes", "bytes", "byte"]
+datatypes = json_schema["event_types"]
 event_to_datatype = {e:d for e, d in zip(event_names, datatypes)}
 
 def generate_data_array(jsons):
@@ -63,10 +63,12 @@ def generate_data_array(jsons):
             dasm_input += json["data"] + "|"
     dasm_input = dasm_input[:-1]
     if platform == "darwin":
-        p = Popen("./spike-dasm --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+        print("HELLO")
+        p = Popen("./spike-dasm --isa=rv64gcv",  stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
     else:
         p = Popen("./spike-dasm.exe --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
     stdout_data = p.communicate(input=dasm_input)[0]
+    print(stdout_data)
     insts = stdout_data.split("|")
     return np.array(insts)
 
@@ -174,7 +176,7 @@ def convert_to_kanata(threads, verbose=False):
                 file.write(f"R\t{id}\t{id}\t1\n")
             elif (event_to_datatype[stage] == "inst_bytes"):
                 file.write(f"S\t{id}\t0\t{stage}\n")
-                file.write(f"L\t{id}\t0\tLabel:{pc}\n")
+                file.write(f"L\t{id}\t0\t:{pc}\n")
             elif (event_to_datatype[stage] == "pc"):
                 file.write(f"S\t{id}\t0\t{stage}\n")
                 file.write(f"L\t{id}\t0\tPC:{pc} \n")
