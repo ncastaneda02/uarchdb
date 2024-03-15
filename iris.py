@@ -51,7 +51,7 @@ event_names = json_schema["event_names"]
 start_stage = json_schema["start_stage"]
 split_stages = json_schema["split_stages"]
 end_stages = json_schema["end_stages"]
-datatypes = ["bytes", "pc", "bytes", "inst_bytes", "bytes", "bytes", "bytes", "bytes", "byte"]
+datatypes = json_schema["event_types"]
 event_to_datatype = {e:d for e, d in zip(event_names, datatypes)}
 
 def generate_data_array(jsons):
@@ -79,46 +79,50 @@ data = np.column_stack((inst_ids,inst_parent, inst_cycle, inst_event, data_field
 columns = ["inst_id", "parent_id", "cycle", "stage", "data"]
 df = pd.DataFrame(data=data, columns=columns)
 
-def construct_graph(df):
-    DG = nx.DiGraph()
-    for row in df.itertuples():
-        DG.add_node(row.inst_id, cycle=row.cycle, data=row.data, stage=row.stage)
-        if row.parent_id != "None":
-            DG.add_edge(row.parent_id, row.inst_id)
-    return DG            
+class InstructionTracer:
+    def __init__(self, df):
+        self.id = 0
+        self.G = nx.DiGraph()
+        for row in df.itertuples():
+            self.G.add_node(row.inst_id, cycle=row.cycle, data=row.data, stage=row.stage)
+            if row.parent_id != "None":
+                self.G.add_edge(row.parent_id, row.inst_id)
 
-def construct_speculative_trace(G):
-    paths = []
-    id = 0
-    for node in G:
-        data = G.nodes[node]
-        if G.in_degree(node) == 0: # root node
-            new_paths = trace_down(G, node, [], [])
-            paths.extend(new_paths)
-    for path in paths:
-        if path[-1][0] not in end_stages:
-            path.append(("FLUSH", str(int(path[-1][1]) + 1), None))
-        else:
-            path.append(("KONNATA_RET", str(int(path[-1][1]) + 1), None))
-        path.insert(0, (id, path[0][-1]))
-    return paths
-
-def trace_down(G, node, curr_path, paths):
-    data = G.nodes[node]
-    curr_path.append((data["stage"], data["cycle"], data["data"]))
-    if G.out_degree(node) == 0: # terminal node
-        paths.append(curr_path)
+    def construct_speculative_trace(self):
+        self.id = 0
+        paths = []
+        for node in self.G:
+            data = self.G.nodes[node]
+            if self.G.in_degree(node) == 0: # root node
+                new_paths = self.trace_down(node, [self.id], [])
+                self.id += 1
+                paths.extend(new_paths)
+        for path in paths:
+            if path[-1][0] not in end_stages:
+                path.append(("FLUSH", int(path[-1][1]) + 1, "None"))
+            else:
+                path.append(("KONNATA_RET", int(path[-1][1]) + 1, "None"))
         return paths
-    succs = list(DG.successors(node))
-    if data["stage"] not in split_stages and len(succs) > 1:
-        inst_paths = [trace_down(G, n, [], [])[0] for n in succs]
-        inst_paths = inst_paths[1] + inst_paths[0]
-        inst_paths.sort(key=lambda x: x[1])
-        paths.append(curr_path + inst_paths)
-    else:
+
+    def trace_down(self, node, curr_path, paths):
+        data = self.G.nodes[node]
+        curr_path.append((data["stage"], int(data["cycle"]), data["data"]))
+        if self.G.out_degree(node) == 0: # terminal node
+            paths.append(curr_path)
+            return paths
+        succs = list(self.G.successors(node))
+        # if data["stage"] not in split_points and len(succs) > 1:
+        #     inst_paths = [self.trace_down(n, [], [])[0] for n in succs]
+        #     inst_paths = inst_paths[1] + inst_paths[0]
+        #     inst_paths.sort(key=lambda x: x[1])
+        #     paths.append(curr_path + inst_paths)
         for n in succs:
-            paths.extend(trace_down(G, n, curr_path[:], []))
-    return paths
+            if n == succs[0]:
+                paths.extend(self.trace_down(n, curr_path[:], []))
+            else:
+                self.id += 1
+                paths.extend(self.trace_down(n, [self.id, ("DEP", int(data["cycle"]), str(curr_path[0]))], []))
+        return paths
 
 def construct_committed_trace(G):
     paths = []
@@ -140,21 +144,17 @@ def trace_up(G, node):
         node = list(DG.predecessors(node))[0] if list(DG.predecessors(node)) else ""
     return path
 
-DG = construct_graph(df)
-if args.verbose:
-    paths = construct_speculative_trace(DG)
-else:
-    paths = construct_committed_trace(DG)
+tracer = InstructionTracer(df)
+paths = tracer.construct_speculative_trace()
 
 def convert_to_kanata(threads, verbose=False):
     pq = []
-    id = 0
     if not verbose:
         threads = list(filter(lambda x: x[-1][0] == 'KONNATA_RET', threads)) #Relies on the last element of inst list being RET
     for inst in threads:
+        id = inst[0]
         for stage in inst[1:]:
             heapq.heappush(pq, ((int(stage[1])), (id, stage[2], stage[0]))) #Min heap of (cycle -> (unique_id, pc, pipeline stage))
-        id += 1
             
     with open(args.output_file, 'w') as file:
         file.write('Kanata    0004\n')
@@ -170,11 +170,15 @@ def convert_to_kanata(threads, verbose=False):
                 # file.write(f"L    {id}    0    {pc}\n")
             if (stage == 'KONNATA_RET'):
                 file.write(f"R\t{id}\t{id}\t0\n")
+            elif (stage == 'DEP'):
+                # spawn new row and draw dependency between this row and next
+                file.write(f"I\t{id}\t{cycle}\t0\n")
+                file.write(f"W\t{id}\t{int(pc)}\t1\n")
             elif (stage == 'FLUSH'):
                 file.write(f"R\t{id}\t{id}\t1\n")
             elif (event_to_datatype[stage] == "inst_bytes"):
                 file.write(f"S\t{id}\t0\t{stage}\n")
-                file.write(f"L\t{id}\t0\tLabel:{pc}\n")
+                file.write(f"L\t{id}\t0\tDASM:{pc}\n")
             elif (event_to_datatype[stage] == "pc"):
                 file.write(f"S\t{id}\t0\t{stage}\n")
                 file.write(f"L\t{id}\t0\tPC:{pc} \n")
@@ -184,5 +188,4 @@ def convert_to_kanata(threads, verbose=False):
 
             prev_cycle = cycle
             cycle, (id, pc, stage) = heapq.heappop(pq)
-
 convert_to_kanata(paths, verbose=True)
