@@ -111,18 +111,20 @@ class InstructionTracer:
             paths.append(curr_path)
             return paths
         succs = list(self.G.successors(node))
-        # if data["stage"] not in split_points and len(succs) > 1:
-        #     inst_paths = [self.trace_down(n, [], [])[0] for n in succs]
-        #     inst_paths = inst_paths[1] + inst_paths[0]
-        #     inst_paths.sort(key=lambda x: x[1])
-        #     paths.append(curr_path + inst_paths)
-        for n in succs:
-            if n == succs[0]:
+        datas = [(n, self.G.nodes[n]) for n in succs]
+        datas.sort(key=lambda x: x[1]["stage"])
+        groups = [list(g) for _,g in groupby(datas, key=lambda x: x[1]["stage"])]
+        for g in groups:
+            self.G.nodes[g[-1][0]]["cycle"] = self.G.nodes[g[0][0]]["cycle"]
+        new_succs = [g[-1][0] for g in groups]
+        for n in new_succs:
+            if n == new_succs[0]:
                 paths.extend(self.trace_down(n, curr_path[:], []))
             else:
                 self.id += 1
                 paths.extend(self.trace_down(n, [self.id, ("DEP", int(data["cycle"]), str(curr_path[0]))], []))
         return paths
+
 
 def construct_committed_trace(G):
     paths = []
