@@ -1,7 +1,0 @@
-{
-    "event_names": ["IF", "RET", "MEM", "RR", "RW", "X", "DISP"],
-    "event_types": ["pc", "bytes", "bytes", "bytes", "bytes", "bytes", "inst_bytes"],
-    "start_stage": "IF",
-    "split_stages": [],
-    "end_stages": ["RET"]
-}
