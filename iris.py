@@ -310,26 +310,33 @@ event_to_datatype = {e:d for e, d in zip(event_names, datatypes)}
 
 def generate_data_array(jsons):
     """
-    Decodes data field of GenEvent annotations. Inputs all data into 
-    Spike Disassembler and optionally decodes Gemmini instructions
+    Decodes data field of GenEvent annotations. Uses
+    Spike Disassembler and optionally decodes Gemmini instructions.
+    Spike executables currently only work on Linux and MacOS
     """
     dasm_input = ""
     inst_dump_list = []
-    for json in jsons:
-        if args.gemmini and event_to_datatype[json["event_name"]] == "inst_bytes":
-            dasm_input += gemmini_decode(int(json["data"], 16)) + "|"
-        elif event_to_datatype[json["event_name"]] == "inst_bytes":
-            dasm_input += "DASM(" + json["data"] + ")|"
-            inst_dump_list.append(json["data"])
-        else:
-            dasm_input += json["data"] + "|"
-    dasm_input = dasm_input[:-1]
-    if platform == "darwin":
-        p = Popen("./spike-dasm --isa=rv64gcv",  stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+    insts = []
+    if args.gemmini:
+        for json in jsons:
+            if event_to_datatype[json["event_name"]] == "inst_bytes":
+                insts.append(gemmini_decode(int(json["data"], 16)))
+            else:
+                insts.append(json["data"])
     else:
-        p = Popen("./spike-dasm.exe --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
-    stdout_data = p.communicate(input=dasm_input)[0]
-    insts = stdout_data.split("|")
+        for json in jsons:
+            if event_to_datatype[json["event_name"]] == "inst_bytes":
+                dasm_input += "DASM(" + json["data"] + ")|"
+                inst_dump_list.append(json["data"])
+            else:
+                dasm_input += json["data"] + "|"
+        dasm_input = dasm_input[:-1]
+        if platform == "darwin":
+            p = Popen("./spike-dasm --isa=rv64gcv",  stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+        else:
+            p = Popen("./spike-dasm.exe --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+        stdout_data = p.communicate(input=dasm_input)[0]
+        insts = stdout_data.split("|")
     print(insts)
     return np.array(insts)
 
@@ -369,6 +376,8 @@ class InstructionTracer:
                 if parent_id == inst_id:
                     parent_id = str(row.parent_id) + "rev" + str(m[row.parent_id] - 1)
                 self.G.add_edge(parent_id, inst_id)
+            
+            nx.draw(self.G)
 
 
     def construct_speculative_trace(self):
