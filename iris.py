@@ -70,6 +70,7 @@ config_type = {
 
 masks = { # masks for extracting bits from rs1
     "first_16_bits": 0xFFFF,
+    "first_32_bits": 0xFFFFFFFF,
     "3rd_bit": 0x4,
     "4th_bit": 0x8,
     "9th_bit": 0x100,
@@ -121,7 +122,7 @@ def decode_compute(rs1, rs2):
     b_local_addr = rs2 & 0xFFFFFFFF
     b_col = rs2 & 0xFFFF00000000 >> 32
     b_row = rs2 & 0xFFFF000000000000 >> 48
-    return f"A Scratchpad addr: {hex(a_local_addr)}, {a_col} cols, {a_row} rows, B Scratchpad addr: {hex(b_local_addr)}, {b_col} cols, {b_row} rows"
+    return f"A Scratchpad addr: {hex(a_local_addr)}, {a_col} cols, {a_row} rows, D/B Scratchpad addr: {hex(b_local_addr)}, {b_col} cols, {b_row} rows"
 
 def decode_preload(rs1, rs2):
     d_local_addr = rs1 & 0xFFFFFFFF
@@ -130,7 +131,7 @@ def decode_preload(rs1, rs2):
     c_local_addr = rs2 & 0xFFFFFFFF
     c_col = rs2 & 0xFFFF0000 >> 32
     c_row = rs2 & 0xFFFF000000000000 >> 48
-    return f"D Scratchpad addr: {hex(d_local_addr)}, {d_col} cols, {d_row} rows, C Scratchpad addr: {hex(c_local_addr)}, {c_col} cols, {c_row} rows"
+    return f"D/B Scratchpad addr: {hex(d_local_addr)}, {d_col} cols, {d_row} rows, C Scratchpad addr: {hex(c_local_addr)}, {c_col} cols, {c_row} rows"
 
 def decode_config_bounds(rs1, rs2):
     """
@@ -310,33 +311,26 @@ event_to_datatype = {e:d for e, d in zip(event_names, datatypes)}
 
 def generate_data_array(jsons):
     """
-    Decodes data field of GenEvent annotations. Uses
-    Spike Disassembler and optionally decodes Gemmini instructions.
-    Spike executables currently only work on Linux and MacOS
+    Decodes data field of GenEvent annotations. Inputs all data into 
+    Spike Disassembler and optionally decodes Gemmini instructions
     """
     dasm_input = ""
     inst_dump_list = []
-    insts = []
-    if args.gemmini:
-        for json in jsons:
-            if event_to_datatype[json["event_name"]] == "inst_bytes":
-                insts.append(gemmini_decode(int(json["data"], 16)))
-            else:
-                insts.append(json["data"])
-    else:
-        for json in jsons:
-            if event_to_datatype[json["event_name"]] == "inst_bytes":
-                dasm_input += "DASM(" + json["data"] + ")|"
-                inst_dump_list.append(json["data"])
-            else:
-                dasm_input += json["data"] + "|"
-        dasm_input = dasm_input[:-1]
-        if platform == "darwin":
-            p = Popen("./spike-dasm --isa=rv64gcv",  stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+    for json in jsons:
+        if args.gemmini and event_to_datatype[json["event_name"]] == "inst_bytes":
+            dasm_input += gemmini_decode(int(json["data"], 16)) + "|"
+        elif event_to_datatype[json["event_name"]] == "inst_bytes":
+            dasm_input += "DASM(" + json["data"] + ")|"
+            inst_dump_list.append(json["data"])
         else:
-            p = Popen("./spike-dasm.exe --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
-        stdout_data = p.communicate(input=dasm_input)[0]
-        insts = stdout_data.split("|")
+            dasm_input += json["data"] + "|"
+    dasm_input = dasm_input[:-1]
+    if platform == "darwin":
+        p = Popen("./spike-dasm --isa=rv64gcv",  stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+    else:
+        p = Popen("./spike-dasm.exe --isa=rv64gcv", stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True, shell=True)
+    stdout_data = p.communicate(input=dasm_input)[0]
+    insts = stdout_data.split("|")
     print(insts)
     return np.array(insts)
 
@@ -370,6 +364,7 @@ class InstructionTracer:
                 m[row.inst_id] = 0
             inst_id = str(row.inst_id) + "rev" + str(m[row.inst_id]) #Unique inst_id
 
+            # self.G.add_node(inst_id, cycle=row.cycle, data=f"\"{row.data}\"", stage=f"\"{row.stage}\"")
             self.G.add_node(inst_id, cycle=row.cycle, data=row.data, stage=row.stage)
             if row.parent_id != "None":
                 parent_id = str(row.parent_id) + "rev" + str(m[row.parent_id])
@@ -377,7 +372,11 @@ class InstructionTracer:
                     parent_id = str(row.parent_id) + "rev" + str(m[row.parent_id] - 1)
                 self.G.add_edge(parent_id, inst_id)
             
-            nx.draw(self.G)
+        #nx.drawing.nx_pydot.write_dot(self.G, ".sh")
+        #import pygraphviz as pgv
+        #G = pgv.AGraph("./graph.dot")  
+        #G.layout(prog="dot")
+        #G.draw("graph.png")
 
 
     def construct_speculative_trace(self):
@@ -400,6 +399,7 @@ class InstructionTracer:
 
     def trace_down(self, node, curr_path, paths):
         data = self.G.nodes[node]
+        print(data)
         curr_path.append((data["stage"], int(data["cycle"]), data["data"]))
         if self.G.out_degree(node) == 0: # terminal node
             paths.append(curr_path)
